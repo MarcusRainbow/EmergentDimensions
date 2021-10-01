@@ -1,4 +1,4 @@
-import Data.Vector.Unboxed hiding (foldr1, sum, length, last, zipWith, (++))
+import Data.Vector.Unboxed hiding (foldr1, sum, length, last, zipWith, map, (++))
 import qualified Data.Vector.Unboxed as V
 import qualified Data.Vector as VV
 import Control.Exception
@@ -7,20 +7,43 @@ import Debug.Trace
 test_vector_from_list :: Vector Float
 test_vector_from_list = fromList [1.0, 2.0, 3.0]
 
+-- |Given a set of distances between points, calculate
+-- |a consistent set of coordinates for each point. The
+-- |distances are supplied as a vector of vectors as
+-- |an encoding of a symmetric matrix with diagonal zero.
+-- |The coordinates are returned as vectors where zero
+-- |coordinates may be zero-suppressed on the right hand
+-- |side. Thus the origin is empty vector. This allows
+-- |the implementation to be agnostic of the number of
+-- |dimensions.
+coords :: VV.Vector (Vector Float) -> VV.Vector (Vector Float)
+coords s = let n = VV.length s in
+    VV.constructN n (coords_constructor s)
+
+-- |Construct one of the coordinate sets x_j given the distances
+-- |s_ij and the previous coordinate sets p_ij
+coords_constructor ::  VV.Vector (Vector Float) ->  VV.Vector (Vector Float) ->  Vector Float
+coords_constructor s p = let ss = s VV.! (VV.length p) in
+    calc_coord ss p
+
 -- |Similar to Gram-Schmidt orthogonalisation but where
 -- |we supply a vector of distances. This call constructs
 -- |the cartesian coordinates of one point defined by
 -- |its distances from the preceding points, vector s_i, and
 -- |the cartesian coordinates of the preceding points p_ij
 calc_coord :: Vector Float -> VV.Vector (Vector Float) -> Vector Float
-calc_coord s p = constructN (V.length (VV.last p) + 1) (coord_constructor s p)
+calc_coord s p = case (length p) of
+    0 -> empty           -- first coord is the origin (empty vector)
+    1 -> fromList [s!0]  -- second coord is (s) where s is distance 
+    otherwise -> constructN (V.length (VV.last p) + 1) (coord_constructor s p)
 
 -- |Construct one of the coordinate dimensions x_n given the
 -- |preceding dimensions x_i and the preceding coordinates p_ij
 coord_constructor :: Vector Float -> VV.Vector (Vector Float) -> Vector Float -> Float
 coord_constructor s p x = 
     let 
-        b = trace ("coord_constructor s=" ++ (show s) ++ " p=" ++ (show p) ++ " x=" ++ (show x))(VV.last p)
+        -- b = trace ("coord_constructor: s=" ++ (show s) ++ " p=" ++ (show p) ++ " x=" ++ (show x)) (VV.last p)
+        b = VV.last p
         m = (V.length b) - 1
     in
         if (V.length x) <= m then
@@ -90,6 +113,65 @@ test_calc_coord_hypercube = let
     assert (approx_equal_vector 1e-6 result (fromList [0.0, 0.0, 1.0]))
     result
 
+-- |Test coord generator for a 3d simplex
+test_calc_coord_simplex :: Vector Float
+test_calc_coord_simplex = let
+    sample_dists = fromList [1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+    sample_prev = VV.fromList [empty, fromList [1.0]]
+    result = calc_coord sample_dists sample_prev in
+    assert (approx_equal_vector 1e-6 result (fromList [0.5, 0.5 * sqrt 3]))
+    result
+
+-- |Test coord generator for the first point
+test_calc_coord_first :: Vector Float
+test_calc_coord_first = let
+    sample_dists = fromList [1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+    sample_prev = VV.empty
+    result = calc_coord sample_dists sample_prev in
+    assert (V.null result)
+    result
+
+-- |Test coord generator for the second point
+test_calc_coord_second :: Vector Float
+test_calc_coord_second = let
+    sample_dists = fromList [1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+    sample_prev = VV.fromList [empty]
+    result = calc_coord sample_dists sample_prev in
+    assert (approx_equal_vector 1e-6 result (fromList [1.0]))
+    result
+
+-- |Overall test, given a collection of 3 points all one apart
+test_coords_simplex :: VV.Vector (Vector Float)
+test_coords_simplex = let
+    sample_dists = fromLists [
+        [1.0],
+        [1.0, 1.0],
+        [1.0, 1.0, 1.0]]
+    result = coords sample_dists in
+    assert (approx_equal_vv 1e-6 result (fromLists [
+        [],
+        [1.0],
+        [0.5, 0.5 * sqrt 3]]))
+    result
+
+-- |Overall test, given a collection of 5 points all one apart
+test_coords_4d_simplex :: VV.Vector (Vector Float)
+test_coords_4d_simplex = let
+    sample_dists = fromLists [
+        [1.0],
+        [1.0, 1.0],
+        [1.0, 1.0, 1.0],
+        [1.0, 1.0, 1.0, 1.0],
+        [1.0, 1.0, 1.0, 1.0, 1.0]]
+    result = coords sample_dists in
+    assert (approx_equal_vv 1e-6 result (fromLists [
+        [],
+        [1.0],
+        [0.5, 0.8660254],
+        [0.57735026,0.24401695,0.7791806],
+        [0.64169973,0.16621879,0.11416383,0.7399725]]))
+    result
+
 -- |Approx absolute comparison of floats
 approx_equal :: Float -> Float -> Float -> Bool
 approx_equal tol x y = abs (x - y) < tol
@@ -98,12 +180,13 @@ approx_equal tol x y = abs (x - y) < tol
 approx_equal_vector :: Float -> Vector Float -> Vector Float -> Bool
 approx_equal_vector tol x y = V.foldr (\ x y -> (approx_equal tol x 0.0) && y) True (V.zipWith (-) x y)
 
--- |Testing some basic vector indexing
-test_indexing :: Float
-test_indexing =
-    s!0 + s!1 + s!2^2
-    where
-        s = fromList [0.0, 1.0, 2.0]
+-- |Construct a vector of vectors from a list of lists
+fromLists :: [[Float]] -> VV.Vector (Vector Float)
+fromLists v = VV.fromList (map fromList v)
+
+-- |Approx absolute comparison of vectors of vectors of floats
+approx_equal_vv :: Float -> VV.Vector (Vector Float) -> VV.Vector (Vector Float) -> Bool
+approx_equal_vv tol x y = VV.and ((VV.zipWith (approx_equal_vector tol)) x y)
 
 main :: IO ()
 main = do
@@ -113,9 +196,13 @@ main = do
     putStrLn $ "test_sum2: " ++ (show test_sum2)
     putStrLn $ "test_sum_pair: " ++ (show test_sum_pair)
     putStrLn $ "test_sum2_diff: " ++ (show test_sum2_diff)
-    putStrLn $ "test_indexing: " ++ (show test_indexing)
     putStrLn $ "test_coord_constructor: " ++ (show test_coord_constructor)
     putStrLn $ "test_coord_constructor_final: " ++ (show test_coord_constructor_final)
     putStrLn $ "test_calc_coord_hypercube: " ++ (show test_calc_coord_hypercube)
+    putStrLn $ "test_calc_coord_simplex: " ++ (show test_calc_coord_simplex)
+    putStrLn $ "test_calc_coord_first: " ++ (show test_calc_coord_first)
+    putStrLn $ "test_calc_coord_second: " ++ (show test_calc_coord_second)
+    putStrLn $ "test_coords_simplex: " ++ (show test_coords_simplex)
+    putStrLn $ "test_coords_4d_simplex: " ++ (show test_coords_4d_simplex)
     putStrLn "...all tests passed"
     putStrLn ""
