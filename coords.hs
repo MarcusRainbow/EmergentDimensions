@@ -17,7 +17,7 @@ test_vector_from_list = fromList [1.0, 2.0, 3.0]
 -- |the implementation to be agnostic of the number of
 -- |dimensions.
 coords :: VV.Vector (Vector Float) -> VV.Vector (Vector Float)
-coords s = let n = (VV.length s + 1) in
+coords s = let n = VV.length s + 1 in
     VV.constructN n (coords_constructor s)
 
 -- |Construct one of the coordinate sets x_j given the distances
@@ -45,14 +45,14 @@ calc_coord s p = case (length p) of
 coord_constructor :: Vector Float -> VV.Vector (Vector Float) -> Vector Float -> Float
 coord_constructor s p x = 
     let 
-        -- b = trace ("coord_constructor: s=" ++ (show s) ++ " p=" ++ (show p) ++ " x=" ++ (show x)) (VV.last p)
-        b = VV.last p
-        n = V.length b
+        -- n = trace ("coord_constructor: s=" ++ (show s) ++ " p=" ++ (show p) ++ " x=" ++ (show x)) (V.length x) + 1
+        n = (V.length x) + 1
+        m = VV.length p
     in
-        if (V.length x) < n then
-            (s!0^2 - s!n^2 + sum2 b - 2 * (sum_pair b x)) / (2 * b!(n-1))
+        if n < m then let b = p VV.! n in
+            (s!0^2 - s!n^2 + sum2 b - 2 * (sum_pair b x)) / (2 * V.last b)
         else
-            sqrt (s!n^2 - sum2_diff x b)
+            sqrt ((V.last s)^2 - sum2_diff x (VV.last p))
 
 -- |Sum of the squares of the items in a vector
 sum2 :: Vector Float -> Float
@@ -109,7 +109,7 @@ test_coord_constructor :: Float
 test_coord_constructor = let
     root_2 = sqrt 2.0
     sample_dists = fromList [1.0, root_2, root_2, root_2]
-    sample_prev = VV.fromList [empty, fromList [1.0], fromList [0.0, 1.0]]
+    sample_prev = fromLists [[], [1.0], [0.0, 1.0]]
     sample_coords = fromList [0.0]
     result = coord_constructor sample_dists sample_prev sample_coords in
     assert (approx_equal 1e-6 result 0.0) result
@@ -119,7 +119,7 @@ test_coord_constructor_final :: Float
 test_coord_constructor_final = let
     root_2 = sqrt 2.0
     sample_dists = fromList [1.0, root_2, root_2, root_2]
-    sample_prev = VV.fromList [empty, fromList [1.0], fromList [0.0, 1.0]]
+    sample_prev = fromLists [[], [1.0], [0.0, 1.0]]
     sample_coords = fromList [0.0, 0.0]
     result = coord_constructor sample_dists sample_prev sample_coords in
     assert (approx_equal 1e-6 result 1.0) result
@@ -128,10 +128,30 @@ test_coord_constructor_final = let
 test_coord_constructor_problem :: Float
 test_coord_constructor_problem = let
     sample_dists = fromList [1.0, 1.0, 1.0]
-    sample_prev = VV.fromList [empty, fromList [1.0]]
+    sample_prev = fromLists [[], [1.0]]
     sample_coords = fromList [0.5]
     result = coord_constructor sample_dists sample_prev sample_coords in
     -- assert (approx_equal 1e-6 result 1.0) 
+    result
+    
+-- |Test coord constructor in case that gave NaN
+test_coord_constructor_degenerate1 :: Float
+test_coord_constructor_degenerate1 = let
+    sample_dists = fromList [5.0, 4.0, 3.0]
+    sample_prev = fromLists [[], [3.0], [0.0, 4.0]]
+    sample_coords = fromList []
+    result = coord_constructor sample_dists sample_prev sample_coords in
+    assert (approx_equal 1e-6 result 3.0) 
+    result
+
+-- |Test coord constructor in case that gave NaN
+test_coord_constructor_degenerate2 :: Float
+test_coord_constructor_degenerate2 = let
+    sample_dists = fromList [5.0, 4.0, 3.0]
+    sample_prev = fromLists [[], [3.0], [0.0, 4.0]]
+    sample_coords = fromList [3.0]
+    result = coord_constructor sample_dists sample_prev sample_coords in
+    assert (approx_equal 1e-6 result 4.0) 
     result
 
 -- |Test coord generator for a partial hypercube (missing far corners)
@@ -144,11 +164,11 @@ test_calc_coord_hypercube = let
     assert (approx_equal_vector 1e-6 result (fromList [0.0, 0.0, 1.0]))
     result
 
--- |Test coord generator for a 3d simplex
+-- |Test coord generator for a simplex
 test_calc_coord_simplex :: Vector Float
 test_calc_coord_simplex = let
-    sample_dists = fromList [1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
-    sample_prev = VV.fromList [empty, fromList [1.0]]
+    sample_dists = fromList [1.0, 1.0]
+    sample_prev = fromLists [[], [1.0]]
     result = calc_coord sample_dists sample_prev in
     assert (approx_equal_vector 1e-6 result (fromList [0.5, 0.5 * sqrt 3]))
     result
@@ -183,7 +203,7 @@ test_coords_simplex = let
         [],
         [1.0],
         [0.5, 0.8660254],
-        [0.57735026,0.24401695,0.7791806]]))
+        [0.5,0.28867513,0.8164966]]))
     result
 
 -- |Overall test, given a collection of 5 points all one apart
@@ -199,8 +219,8 @@ test_coords_4d_simplex = let
         [],
         [1.0],
         [0.5, 0.8660254],
-        [0.57735026,0.24401695,0.7791806],
-        [0.64169973,0.16621879,0.11416383,0.7399725]]))
+        [0.5,0.28867513,0.8164966],
+        [0.5,0.28867513,0.20412417,0.7905694]]))
     result
 
 -- |Test of a set of points that form a 3, 4, 5 triangle
@@ -244,6 +264,10 @@ approx_equal_vector tol x y =
 fromLists :: [[Float]] -> VV.Vector (Vector Float)
 fromLists v = VV.fromList (map fromList v)
 
+-- |Test list list constructor
+test_from_lists :: VV.Vector (Vector Float)
+test_from_lists = fromLists [[], [1.0], [1.0, 2.0]]
+
 -- |Approx absolute comparison of vectors of vectors of floats
 approx_equal_vv :: Float -> VV.Vector (Vector Float) -> VV.Vector (Vector Float) -> Bool
 approx_equal_vv tol x y = 
@@ -255,6 +279,7 @@ main = do
     putStrLn ""
     putStrLn "Running tests..."
     putStrLn $ "test_vector_from_list: " ++ (show test_vector_from_list)
+    putStrLn $ "test_from_lists: " ++ (show test_from_lists)
     putStrLn $ "test_sum2: " ++ (show test_sum2)
     putStrLn $ "test_sum_pair: " ++ (show test_sum_pair)
     putStrLn $ "test_sum_pair_mismatch: " ++ (show test_sum_pair_mismatch)
@@ -264,6 +289,8 @@ main = do
     putStrLn $ "test_coord_constructor: " ++ (show test_coord_constructor)
     putStrLn $ "test_coord_constructor_final: " ++ (show test_coord_constructor_final)
     putStrLn $ "test_coord_constructor_problem: " ++ (show test_coord_constructor_problem)
+    putStrLn $ "test_coord_constructor_degenerate1: " ++ (show test_coord_constructor_degenerate1)
+    putStrLn $ "test_coord_constructor_degenerate2: " ++ (show test_coord_constructor_degenerate2)
     putStrLn $ "test_calc_coord_hypercube: " ++ (show test_calc_coord_hypercube)
     putStrLn $ "test_calc_coord_simplex: " ++ (show test_calc_coord_simplex)
     putStrLn $ "test_calc_coord_first: " ++ (show test_calc_coord_first)
