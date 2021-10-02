@@ -2,6 +2,7 @@ import Data.Vector.Unboxed hiding (foldr1, sum, length, last, zipWith, map, (++)
 import qualified Data.Vector.Unboxed as V
 import qualified Data.Vector as VV
 import Data.Maybe
+import Data.Either
 import Control.Exception
 import Debug.Trace
 
@@ -9,14 +10,18 @@ import Debug.Trace
 tolerance :: Float
 tolerance = 1e-6
 
-test_vector_from_list :: Vector Float
-test_vector_from_list = fromList [1.0, 2.0, 3.0]
-
 -- |Given a set of distances between points, count
--- |the dimensions.
-count_dimensions :: VV.Vector (Vector Float) -> Int
-count_dimensions s = let c = coords s in
-    if VV.null c then 0 else V.length (VV.last c) 
+-- |the dimensions. If there is an error, such as a set of
+-- |distances that do not fit into any possible space, a
+-- |explanatory string is returned. Otherwise the count. 
+count_dimensions :: VV.Vector (Vector Float) -> Either String Int
+count_dimensions s = do
+    c <- coords s
+    t <- uncoords c
+    if approx_equal_vv tolerance s t then
+        return (if VV.null c then 0 else V.length (VV.last c))
+    else
+        Left "Not all distances round-trip successfully in Euclidean space"
 
 -- |Given a set of distances between points, calculate
 -- |a consistent set of coordinates for each point. The
@@ -26,14 +31,16 @@ count_dimensions s = let c = coords s in
 -- |coordinates may be zero-suppressed on the right hand
 -- |side. Thus the origin is empty vector. This allows
 -- |the implementation to be agnostic of the number of
--- |dimensions.
-coords :: VV.Vector (Vector Float) -> VV.Vector (Vector Float)
-coords s = let n = VV.length s + 1 in
-    VV.constructN n (coords_constructor s)
+-- |dimensions. If the coordinates cannot be represented,
+-- |an error string is returned.
+coords :: VV.Vector (Vector Float) -> Either String (VV.Vector (Vector Float))
+coords s = do
+    let n = VV.length s + 1
+    return (VV.constructN n (coords_constructor s))
 
 -- |Construct one of the coordinate sets x_j given the distances
 -- |s_ij and the previous coordinate sets p_ij
-coords_constructor ::  VV.Vector (Vector Float) ->  VV.Vector (Vector Float) ->  Vector Float
+coords_constructor ::  VV.Vector (Vector Float) ->  VV.Vector (Vector Float) -> Vector Float
 coords_constructor s p = let n = VV.length p in
     if n == 0 then
         empty  -- first coordinate is always the origin (empty vector)
@@ -60,7 +67,8 @@ coord_constructor s p x =
         n = 1 + V.length x
         m = if (VV.null p) then 0 else V.length (VV.last p)
     in
-        -- todo need to validate against points we are skipping
+        -- we do not validate against points we are skipping, but that's okay
+        -- because we can finally validate by using uncoord
         if n <= m then let b = first_coord_of_dim n p in
             (s!0^2 - s!n^2 + sum2 b - 2 * (sum_pair b x)) / (2 * V.last b)
         else
@@ -96,10 +104,12 @@ sum2_diff :: Vector Float -> Vector Float -> Float
 sum2_diff v1 v2 = sum2 $ V.zipWith (-) v1 v2
 
 -- |Reverse the action of coords. Given a set of coordinates, calculate
--- |the distances between them.
-uncoords :: VV.Vector (Vector Float) -> VV.Vector (Vector Float)
-uncoords c = let n = VV.length c - 1 in
-    VV.generate n (uncoords_generator c)
+-- |the distances between them. If there is an error, returns an error
+-- |string.
+uncoords :: VV.Vector (Vector Float) -> Either String (VV.Vector (Vector Float))
+uncoords c = do
+    let n = VV.length c - 1
+    return (VV.generate n (uncoords_generator c))
 
 -- |Construct a set of distances from one of a set of coordinates
 uncoords_generator :: VV.Vector (Vector Float) -> Int -> Vector Float
@@ -134,6 +144,31 @@ safe_sqrt x =
         sqrt x
     else
         0.0
+
+-- |Approx absolute comparison of floats
+approx_equal :: Float -> Float -> Float -> Bool
+approx_equal tol x y = abs (x - y) < tol
+
+-- |Approx absolute comparison of vectors of floats
+approx_equal_vector :: Float -> Vector Float -> Vector Float -> Bool
+approx_equal_vector tol x y =
+    V.length x == V.length y &&
+    V.foldr (\ x y -> (approx_equal tol x 0.0) && y) True (V.zipWith (-) x y)
+
+-- |Approx absolute comparison of vectors of vectors of floats
+approx_equal_vv :: Float -> VV.Vector (Vector Float) -> VV.Vector (Vector Float) -> Bool
+approx_equal_vv tol x y = 
+    VV.length x == VV.length y && 
+    VV.and ((VV.zipWith (approx_equal_vector tol)) x y)
+
+match_uncoords :: Float -> VV.Vector (Vector Float) -> VV.Vector (Vector Float) -> Bool
+match_uncoords tol original result = case uncoords result of
+    Left _ -> False
+    Right roundtrip -> approx_equal_vv tol original roundtrip
+
+-- |Construct a vector of vectors from a list of lists
+fromLists :: [[Float]] -> VV.Vector (Vector Float)
+fromLists v = VV.fromList (map fromList v)
 
 -- |Various tests of safe_sqrt
 test_safe_sqrt :: Float
@@ -201,8 +236,7 @@ test_sum2_rem_lt = let
 test_calc_distance :: Float
 test_calc_distance = let
     result = calc_distance (fromList [3.0]) (fromList []) in
-    -- assert (result == 3.0)
-    result
+    assert (result == 3.0) result
 
 -- |Test coord constructor for intermediate step
 test_coord_constructor :: Float
@@ -261,7 +295,7 @@ test_coord_constructor_degenerate_plus = let
     sample_prev = fromLists [[], [3.0], [0.0, 4.0], [3.0, 4.0]]
     sample_coords = fromList [0.0, 0.0]
     result = coord_constructor sample_dists sample_prev sample_coords in
-    -- assert (approx_equal 1e-6 result 4.0) 
+    assert (approx_equal 1e-6 result 12.0) 
     result
 
 -- |Test coord generator for a partial hypercube (missing far corners)
@@ -302,172 +336,166 @@ test_calc_coord_second = let
     result
 
 -- |Overall test, given a collection of 3 points all one apart
-test_coords_simplex :: VV.Vector (Vector Float)
+test_coords_simplex :: Either String (VV.Vector (Vector Float))
 test_coords_simplex = let
     sample_dists = fromLists [
         [1.0],
         [1.0, 1.0],
         [1.0, 1.0, 1.0]]
-    result = coords sample_dists in
-    assert (approx_equal_vv 1e-6 result (fromLists [
+    expected = fromLists [
         [],
         [1.0],
         [0.5, 0.8660254],
-        [0.5,0.28867513,0.8164966]]))
-    assert (approx_equal_vv 1e-6 sample_dists (uncoords result))
-    result
+        [0.5,0.28867513,0.8164966]]
+    in test_coords sample_dists expected
+
+-- |Helper to run any overall test, checking coords and uncoords
+test_coords :: VV.Vector (Vector Float) -> VV.Vector (Vector Float) -> Either String (VV.Vector (Vector Float))
+test_coords sample_dists expected =
+    case coords sample_dists of
+        Left result ->
+            error result
+            Left result 
+        Right result -> 
+            assert (approx_equal_vv 1e-6 result expected)
+            assert (match_uncoords 1e-6 sample_dists result)
+            Right result
 
 -- |Overall test, given a collection of 5 points all one apart
-test_coords_4d_simplex :: VV.Vector (Vector Float)
+test_coords_4d_simplex :: Either String (VV.Vector (Vector Float))
 test_coords_4d_simplex = let
     sample_dists = fromLists [
         [1.0],
         [1.0, 1.0],
         [1.0, 1.0, 1.0],
         [1.0, 1.0, 1.0, 1.0]]
-    result = coords sample_dists in
-    assert (approx_equal_vv 1e-6 result (fromLists [
+    expected = fromLists [
         [],
         [1.0],
         [0.5, 0.8660254],
         [0.5,0.28867513,0.8164966],
-        [0.5,0.28867513,0.20412417,0.7905694]]))
-    assert (approx_equal_vv 1e-6 sample_dists (uncoords result))
-    result
-
+        [0.5,0.28867513,0.20412417,0.7905694]]
+    in test_coords sample_dists expected
 
 -- |Round trip test of a near-equilateral 4d simplex
-test_roundtrip_4d_simplex :: VV.Vector (Vector Float)
+test_roundtrip_4d_simplex :: Either String (VV.Vector (Vector Float))
 test_roundtrip_4d_simplex = let
     sample_dists = fromLists [
         [1.01],
         [1.02, 1.03],
         [1.04, 1.05, 1.06],
         [1.07, 1.08, 1.09, 1.0]]
-    c = coords sample_dists
-    result = uncoords c in
-    assert (approx_equal_vv 1e-6 sample_dists result)
-    result
+    expected = fromLists [
+        [],
+        [1.01],
+        [0.49485147,0.8919204],
+        [0.49465352,0.28524965,0.8692241],
+        [0.49435645,0.2847417,0.33074602,0.8426393]]
+    in test_coords sample_dists expected
 
 -- |Test of a set of points that form a 3, 4, 5 triangle
-test_coords_345 :: VV.Vector (Vector Float)
+test_coords_345 :: Either String (VV.Vector (Vector Float))
 test_coords_345 = let
     sample_dists = fromLists [
         [3.0],
         [4.0, 5.0]]
-    result = coords sample_dists in
-    assert (approx_equal_vv 1e-6 result (fromLists [
+    expected = fromLists [
         [],
         [3.0],
-        [0.0, 4.0]]))
-    assert (approx_equal_vv 1e-6 sample_dists (uncoords result))
-    result
+        [0.0, 4.0]]
+    in test_coords sample_dists expected
 
 -- |Test of a set of points that form a 3, 4, 5 triangle plus a third dimension
-test_coords_345_plus :: VV.Vector (Vector Float)
+test_coords_345_plus :: Either String (VV.Vector (Vector Float))
 test_coords_345_plus = let
     sample_dists = fromLists [
         [3.0],
         [4.0, 5.0],
         [12.0, (sqrt 153.0), (sqrt 160.0)]]
-    result = coords sample_dists in
-    assert (approx_equal_vv 1e-6 result (fromLists [
+    expected = fromLists [
         [],
         [3.0],
         [0.0, 4.0],
-        [0.0, 0.0, 12.0]]))
-    assert (approx_equal_vv 1e-6 sample_dists (uncoords result))
-    result
+        [0.0, 0.0, 12.0]]
+    in test_coords sample_dists expected
 
 -- |Test of a set of points with one degenerate dimension
-test_coords_degenerate_345 :: VV.Vector (Vector Float)
+test_coords_degenerate_345 :: Either String (VV.Vector (Vector Float))
 test_coords_degenerate_345 = let
     sample_dists = fromLists [
         [3.0],
         [4.0, 5.0],
         [5.0, 4.0, 3.0]]
-    result = coords sample_dists in
-    assert (approx_equal_vv 1e-6 result (fromLists [
+    expected = fromLists [
         [],
         [3.0],
         [0.0, 4.0],
-        [3.0, 4.0]]))
-    assert (approx_equal_vv 1e-6 sample_dists (uncoords result))
-    result
+        [3.0, 4.0]]
+    in test_coords sample_dists expected
 
 -- |Test of a set of points with one degenerate dimension plus another point
-test_coords_degenerate_345_plus :: VV.Vector (Vector Float)
+test_coords_degenerate_345_plus :: Either String (VV.Vector (Vector Float))
 test_coords_degenerate_345_plus = let
     sample_dists = fromLists [
         [3.0],
         [4.0, 5.0],
         [5.0, 4.0, 3.0],
         [12.0, (sqrt 153.0), (sqrt 160.0), 13.0]]
-    result = coords sample_dists in
-    assert (approx_equal_vv 1e-6 result (fromLists [
+    expected = fromLists [
         [],
         [3.0],
         [0.0, 4.0],
         [3.0, 4.0],
-        [0.0, 0.0, 12.0]]))
-    result
+        [0.0, 0.0, 12.0]]
+    in test_coords sample_dists expected
 
 -- |Test of a set of points with one degenerate dimension plus another point
-test_count_dimensions :: Int
-test_count_dimensions = let
+test_count_dimensions_345_plus :: Either String Int
+test_count_dimensions_345_plus = let
     sample_dists = fromLists [
         [3.0],
         [4.0, 5.0],
         [5.0, 4.0, 3.0],
         [12.0, (sqrt 153.0), (sqrt 160.0), 13.0]]
-    result = count_dimensions sample_dists in
-    assert (result == 3)
-    result
+    in test_count_dimensions sample_dists
+
+-- |Run any test of count_dimensions
+test_count_dimensions :: VV.Vector (Vector Float) -> Either String Int
+test_count_dimensions sample = case count_dimensions sample of
+    Left e ->
+        error e
+        Left e
+    Right result ->
+        assert (result == 3)
+        Right result
 
 -- |Test the reverse calculation of distances from coords
-test_uncoords :: VV.Vector (Vector Float)
+test_uncoords :: Either String (VV.Vector (Vector Float))
 test_uncoords = let
     sample_coords = fromLists [
         [],
         [3.0],
         [0.0, 4.0],
         [3.0, 4.0, 0.0]]
-    result = uncoords sample_coords in
-    assert (approx_equal_vv 1e-6 result (fromLists [
-        [3.0],
-        [4.0, 5.0],
-        [5.0, 4.0, 3.0]]))
-    result
-
--- |Approx absolute comparison of floats
-approx_equal :: Float -> Float -> Float -> Bool
-approx_equal tol x y = abs (x - y) < tol
-
--- |Approx absolute comparison of vectors of floats
-approx_equal_vector :: Float -> Vector Float -> Vector Float -> Bool
-approx_equal_vector tol x y =
-    V.length x == V.length y &&
-    V.foldr (\ x y -> (approx_equal tol x 0.0) && y) True (V.zipWith (-) x y)
-
--- |Construct a vector of vectors from a list of lists
-fromLists :: [[Float]] -> VV.Vector (Vector Float)
-fromLists v = VV.fromList (map fromList v)
+    in case uncoords sample_coords of
+        Left e ->
+            error e
+            Left e
+        Right result ->
+            assert (approx_equal_vv 1e-6 result (fromLists [
+                [3.0],
+                [4.0, 5.0],
+                [5.0, 4.0, 3.0]]))
+            Right result
 
 -- |Test list list constructor
 test_from_lists :: VV.Vector (Vector Float)
 test_from_lists = fromLists [[], [1.0], [1.0, 2.0]]
 
--- |Approx absolute comparison of vectors of vectors of floats
-approx_equal_vv :: Float -> VV.Vector (Vector Float) -> VV.Vector (Vector Float) -> Bool
-approx_equal_vv tol x y = 
-    VV.length x == VV.length y && 
-    VV.and ((VV.zipWith (approx_equal_vector tol)) x y)
-
 main :: IO ()
 main = do
     putStrLn ""
     putStrLn "Running tests..."
-    putStrLn $ "test_vector_from_list: " ++ (show test_vector_from_list)
     putStrLn $ "test_from_lists: " ++ (show test_from_lists)
     putStrLn $ "test_safe_sqrt: " ++ (show test_safe_sqrt)
     putStrLn $ "test_sum2: " ++ (show test_sum2)
@@ -498,6 +526,6 @@ main = do
     putStrLn $ "test_coords_degenerate_345: " ++ (show test_coords_degenerate_345)
     putStrLn $ "test_coords_degenerate_345_plus: " ++ (show test_coords_degenerate_345_plus)
     putStrLn $ "test_uncoords: " ++ (show test_uncoords)
-    putStrLn $ "test_count_dimensions: " ++ (show test_count_dimensions)
+    putStrLn $ "test_count_dimensions_345_plus: " ++ (show test_count_dimensions_345_plus)
     putStrLn "...all tests passed"
     putStrLn ""
