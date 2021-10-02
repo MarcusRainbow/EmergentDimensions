@@ -1,11 +1,22 @@
 import Data.Vector.Unboxed hiding (foldr1, sum, length, last, zipWith, map, (++))
 import qualified Data.Vector.Unboxed as V
 import qualified Data.Vector as VV
+import Data.Maybe
 import Control.Exception
 import Debug.Trace
 
+-- |Tolerance used for the absolute comparison of coordinate generation etc.
+tolerance :: Float
+tolerance = 1e-6
+
 test_vector_from_list :: Vector Float
 test_vector_from_list = fromList [1.0, 2.0, 3.0]
+
+-- |Given a set of distances between points, count
+-- |the dimensions.
+count_dimensions :: VV.Vector (Vector Float) -> Int
+count_dimensions s = let c = coords s in
+    if VV.null c then 0 else V.length (VV.last c) 
 
 -- |Given a set of distances between points, calculate
 -- |a consistent set of coordinates for each point. The
@@ -38,7 +49,7 @@ calc_coord :: Vector Float -> VV.Vector (Vector Float) -> Vector Float
 calc_coord s p = case (length p) of
     0 -> empty           -- first coord is the origin (empty vector)
     1 -> fromList [s!0]  -- second coord is (s) where s is distance 
-    otherwise -> constructN (V.length (VV.last p) + 1) (coord_constructor s p)
+    otherwise -> trim1 tolerance (constructN (V.length (VV.last p) + 1) (coord_constructor s p))
 
 -- |Construct one of the coordinate dimensions x_n given the
 -- |preceding dimensions x_i and the preceding coordinates p_ij
@@ -46,13 +57,29 @@ coord_constructor :: Vector Float -> VV.Vector (Vector Float) -> Vector Float ->
 coord_constructor s p x = 
     let 
         -- n = trace ("coord_constructor: s=" ++ (show s) ++ " p=" ++ (show p) ++ " x=" ++ (show x)) (V.length x) + 1
-        n = (V.length x) + 1
-        m = VV.length p
+        n = 1 + V.length x
+        m = if (VV.null p) then 0 else V.length (VV.last p)
     in
-        if n < m then let b = p VV.! n in
+        -- todo need to validate against points we are skipping
+        if n <= m then let b = first_coord_of_dim n p in
             (s!0^2 - s!n^2 + sum2 b - 2 * (sum_pair b x)) / (2 * V.last b)
         else
             safe_sqrt ((V.last s)^2 - sum2_diff x (VV.last p))
+
+-- |Scans through the vector of previous points to find the first with
+-- |the requisite dimension. Must exist (throws error if not)
+first_coord_of_dim :: Int -> VV.Vector (Vector Float) -> Vector Float
+first_coord_of_dim n p = fromJust (VV.find (\ v -> V.length v == n) p)
+
+-- |Trim zeroes off the right end of a vector. This call trims no
+-- |more than one zero. (Useful because we want the vector of
+-- |coordinates to be monotonic increasing in length.)
+trim1 :: Float -> Vector Float -> Vector Float
+trim1 tol v = let l = V.length v in
+    if l > 0 && approx_equal tol (V.last v) 0.0 then
+        unsafeTake (l - 1) v
+    else
+        v
 
 -- |Sum of the squares of the items in a vector
 sum2 :: Vector Float -> Float
@@ -103,7 +130,7 @@ sum2_rem x y =
 -- |Safer version of sqrt, which will not give NaN for slightly negative
 safe_sqrt :: Float -> Float
 safe_sqrt x = 
-    if x >= 0.0 || x < (-1e-6) then
+    if x >= 0.0 || x < (-tolerance) then
         sqrt x
     else
         0.0
@@ -204,7 +231,7 @@ test_coord_constructor_problem = let
     sample_prev = fromLists [[], [1.0]]
     sample_coords = fromList [0.5]
     result = coord_constructor sample_dists sample_prev sample_coords in
-    -- assert (approx_equal 1e-6 result 1.0) 
+    assert (approx_equal 1e-6 result 0.8660254) 
     result
     
 -- |Test coord constructor in case that gave NaN
@@ -225,6 +252,16 @@ test_coord_constructor_degenerate2 = let
     sample_coords = fromList [3.0]
     result = coord_constructor sample_dists sample_prev sample_coords in
     assert (approx_equal 1e-6 result 4.0) 
+    result
+
+-- |Test coord constructor in case that gave invalid final coordinate
+test_coord_constructor_degenerate_plus :: Float
+test_coord_constructor_degenerate_plus = let
+    sample_dists = fromList [12.0, 12.369317, 12.649111, 13.0]
+    sample_prev = fromLists [[], [3.0], [0.0, 4.0], [3.0, 4.0]]
+    sample_coords = fromList [0.0, 0.0]
+    result = coord_constructor sample_dists sample_prev sample_coords in
+    -- assert (approx_equal 1e-6 result 4.0) 
     result
 
 -- |Test coord generator for a partial hypercube (missing far corners)
@@ -326,6 +363,22 @@ test_coords_345 = let
     assert (approx_equal_vv 1e-6 sample_dists (uncoords result))
     result
 
+-- |Test of a set of points that form a 3, 4, 5 triangle plus a third dimension
+test_coords_345_plus :: VV.Vector (Vector Float)
+test_coords_345_plus = let
+    sample_dists = fromLists [
+        [3.0],
+        [4.0, 5.0],
+        [12.0, (sqrt 153.0), (sqrt 160.0)]]
+    result = coords sample_dists in
+    assert (approx_equal_vv 1e-6 result (fromLists [
+        [],
+        [3.0],
+        [0.0, 4.0],
+        [0.0, 0.0, 12.0]]))
+    assert (approx_equal_vv 1e-6 sample_dists (uncoords result))
+    result
+
 -- |Test of a set of points with one degenerate dimension
 test_coords_degenerate_345 :: VV.Vector (Vector Float)
 test_coords_degenerate_345 = let
@@ -338,7 +391,7 @@ test_coords_degenerate_345 = let
         [],
         [3.0],
         [0.0, 4.0],
-        [3.0, 4.0, 0.0]]))
+        [3.0, 4.0]]))
     assert (approx_equal_vv 1e-6 sample_dists (uncoords result))
     result
 
@@ -348,14 +401,27 @@ test_coords_degenerate_345_plus = let
     sample_dists = fromLists [
         [3.0],
         [4.0, 5.0],
-        [5.0, 4.0, 3.0], -- todo another set of distances
-        []]
+        [5.0, 4.0, 3.0],
+        [12.0, (sqrt 153.0), (sqrt 160.0), 13.0]]
     result = coords sample_dists in
-    -- assert (approx_equal_vv 1e-6 result (fromLists [
-    --     [],
-    --     [3.0],
-    --     [0.0, 4.0],
-    --     [3.0, 4.0, 0.0]]))
+    assert (approx_equal_vv 1e-6 result (fromLists [
+        [],
+        [3.0],
+        [0.0, 4.0],
+        [3.0, 4.0],
+        [0.0, 0.0, 12.0]]))
+    result
+
+-- |Test of a set of points with one degenerate dimension plus another point
+test_count_dimensions :: Int
+test_count_dimensions = let
+    sample_dists = fromLists [
+        [3.0],
+        [4.0, 5.0],
+        [5.0, 4.0, 3.0],
+        [12.0, (sqrt 153.0), (sqrt 160.0), 13.0]]
+    result = count_dimensions sample_dists in
+    assert (result == 3)
     result
 
 -- |Test the reverse calculation of distances from coords
@@ -419,6 +485,7 @@ main = do
     putStrLn $ "test_coord_constructor_problem: " ++ (show test_coord_constructor_problem)
     putStrLn $ "test_coord_constructor_degenerate1: " ++ (show test_coord_constructor_degenerate1)
     putStrLn $ "test_coord_constructor_degenerate2: " ++ (show test_coord_constructor_degenerate2)
+    putStrLn $ "test_coord_constructor_degenerate_plus: " ++ (show test_coord_constructor_degenerate_plus)
     putStrLn $ "test_calc_coord_hypercube: " ++ (show test_calc_coord_hypercube)
     putStrLn $ "test_calc_coord_simplex: " ++ (show test_calc_coord_simplex)
     putStrLn $ "test_calc_coord_first: " ++ (show test_calc_coord_first)
@@ -427,7 +494,10 @@ main = do
     putStrLn $ "test_coords_4d_simplex: " ++ (show test_coords_4d_simplex)
     putStrLn $ "test_roundtrip_4d_simplex: " ++ (show test_roundtrip_4d_simplex)
     putStrLn $ "test_coords_345: " ++ (show test_coords_345)
+    putStrLn $ "test_coords_345_plus: " ++ (show test_coords_345_plus)
     putStrLn $ "test_coords_degenerate_345: " ++ (show test_coords_degenerate_345)
+    putStrLn $ "test_coords_degenerate_345_plus: " ++ (show test_coords_degenerate_345_plus)
     putStrLn $ "test_uncoords: " ++ (show test_uncoords)
+    putStrLn $ "test_count_dimensions: " ++ (show test_count_dimensions)
     putStrLn "...all tests passed"
     putStrLn ""
