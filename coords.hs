@@ -3,8 +3,12 @@ import qualified Data.Vector.Unboxed as V
 import qualified Data.Vector as VV
 import Data.Maybe
 import Data.Either
+import System.Random
+import System.Random.Stateful
 import Control.Exception
 import Debug.Trace
+import System.Random.MWC as MWC
+import System.Random.MWC.Distributions as MWC
 
 -- |Tolerance used for the absolute comparison of coordinate generation etc.
 tolerance :: Float
@@ -169,6 +173,16 @@ match_uncoords tol original result = case uncoords result of
 -- |Construct a vector of vectors from a list of lists
 fromLists :: [[Float]] -> VV.Vector (Vector Float)
 fromLists v = VV.fromList (map fromList v)
+
+-- |Construct a vector of vectors as a triangle, given a list of normal inputs
+create_random_triangular_matrix :: StatefulGen g m => g -> (Float, Float) -> Int -> m (VV.Vector (Vector Float))
+create_random_triangular_matrix rnd range n = 
+    VV.generateM n (\ i -> create_random_vector rnd range (i + 1))
+
+-- |Construct a vector of random numbers uniform in the range 0..1
+create_random_vector :: StatefulGen g m => g -> (Float, Float) -> Int -> m (Vector Float)
+create_random_vector rnd range n =
+    V.replicateM n (uniformRM range rnd)
 
 -- |Various tests of safe_sqrt
 test_safe_sqrt :: Float
@@ -457,16 +471,16 @@ test_count_dimensions_345_plus = let
         [4.0, 5.0],
         [5.0, 4.0, 3.0],
         [12.0, (sqrt 153.0), (sqrt 160.0), 13.0]]
-    in test_count_dimensions sample_dists
+    in test_count_dimensions sample_dists 3
 
 -- |Run any test of count_dimensions
-test_count_dimensions :: VV.Vector (Vector Float) -> Either String Int
-test_count_dimensions sample = case count_dimensions sample of
+test_count_dimensions :: VV.Vector (Vector Float) -> Int -> Either String Int
+test_count_dimensions sample n = case count_dimensions sample of
     Left e ->
         error e
         Left e
     Right result ->
-        assert (result == 3)
+        assert (result == n)
         Right result
 
 -- |Test the reverse calculation of distances from coords
@@ -496,6 +510,7 @@ main :: IO ()
 main = do
     putStrLn ""
     putStrLn "Running tests..."
+
     putStrLn $ "test_from_lists: " ++ (show test_from_lists)
     putStrLn $ "test_safe_sqrt: " ++ (show test_safe_sqrt)
     putStrLn $ "test_sum2: " ++ (show test_sum2)
@@ -527,5 +542,11 @@ main = do
     putStrLn $ "test_coords_degenerate_345_plus: " ++ (show test_coords_degenerate_345_plus)
     putStrLn $ "test_uncoords: " ++ (show test_uncoords)
     putStrLn $ "test_count_dimensions_345_plus: " ++ (show test_count_dimensions_345_plus)
+
+    -- Some tests use random numbers. One source for all these
+    rnd <- MWC.createSystemRandom
+    simplex30 <- create_random_triangular_matrix rnd (0.99, 1.01) 30
+    putStrLn $ "test_count_large_random_simplex: " ++ (show (test_count_dimensions simplex30 30))
+
     putStrLn "...all tests passed"
     putStrLn ""
