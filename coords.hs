@@ -174,12 +174,14 @@ match_uncoords tol original result = case uncoords result of
 fromLists :: [[Float]] -> VV.Vector (Vector Float)
 fromLists v = VV.fromList (map fromList v)
 
--- |Construct a vector of vectors as a triangle, given a list of normal inputs
+-- |Construct a vector of vectors as a triangle, given Monadic random generator,
+-- |a range, and a size.
 create_random_triangular_matrix :: StatefulGen g m => g -> (Float, Float) -> Int -> m (VV.Vector (Vector Float))
 create_random_triangular_matrix rnd range n = 
     VV.generateM n (\ i -> create_random_vector rnd range (i + 1))
 
--- |Construct a vector of random numbers uniform in the range 0..1
+-- |Construct a vector of random numbers uniform in the range 0..1, given a Monadic
+-- |random generator and a size.
 create_random_vector :: StatefulGen g m => g -> (Float, Float) -> Int -> m (Vector Float)
 create_random_vector rnd range n =
     V.replicateM n (uniformRM range rnd)
