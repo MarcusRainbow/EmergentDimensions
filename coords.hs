@@ -3,10 +3,12 @@ import qualified Data.Vector.Unboxed as V
 import qualified Data.Vector as VV
 import Data.Maybe
 import Data.Either
+import Numeric.IEEE
 import System.Random
 import System.Random.Stateful
 import Control.Exception
 import Debug.Trace
+import System.Environment
 import System.Random.MWC as MWC
 import System.Random.MWC.Distributions as MWC
 
@@ -38,9 +40,7 @@ count_dimensions s = do
 -- |dimensions. If the coordinates cannot be represented,
 -- |an error string is returned.
 coords :: VV.Vector (Vector Float) -> Either String (VV.Vector (Vector Float))
-coords s = do
-    let n = VV.length s + 1
-    return (VV.constructN n (coords_constructor s))
+coords s = validate_non_nan $ VV.constructN (VV.length s + 1) (coords_constructor s)
 
 -- |Construct one of the coordinate sets x_j given the distances
 -- |s_ij and the previous coordinate sets p_ij
@@ -60,7 +60,16 @@ calc_coord :: Vector Float -> VV.Vector (Vector Float) -> Vector Float
 calc_coord s p = case (length p) of
     0 -> empty           -- first coord is the origin (empty vector)
     1 -> fromList [s!0]  -- second coord is (s) where s is distance 
-    otherwise -> trim1 tolerance (constructN (V.length (VV.last p) + 1) (coord_constructor s p))
+    otherwise -> let n = V.length (VV.last p) + 1 in 
+        trim1 tolerance (constructN n (coord_constructor s p))
+
+-- |Validates a vector of vectors, checking the values for NaN
+validate_non_nan :: VV.Vector (Vector Float) -> Either String (VV.Vector (Vector Float))
+validate_non_nan v = 
+    if VV.any (V.any isNaN) v then
+        Left $ "At least one coordinate is NaN in " ++ show v
+    else
+        Right v
 
 -- |Construct one of the coordinate dimensions x_n given the
 -- |preceding dimensions x_i and the preceding coordinates p_ij
@@ -76,7 +85,9 @@ coord_constructor s p x =
         if n <= m then let b = first_coord_of_dim n p in
             (s!0^2 - s!n^2 + sum2 b - 2 * (sum_pair b x)) / (2 * V.last b)
         else
-            safe_sqrt ((V.last s)^2 - sum2_diff x (VV.last p))
+            case safe_sqrt ((V.last s)^2 - sum2_diff x (VV.last p)) of
+                Just x  -> x
+                Nothing -> nan -- sadly there's no way to pass monads through constructN
 
 -- |Scans through the vector of previous points to find the first with
 -- |the requisite dimension. Must exist (throws error if not)
@@ -111,21 +122,22 @@ sum2_diff v1 v2 = sum2 $ V.zipWith (-) v1 v2
 -- |the distances between them. If there is an error, returns an error
 -- |string.
 uncoords :: VV.Vector (Vector Float) -> Either String (VV.Vector (Vector Float))
-uncoords c = do
-    let n = VV.length c - 1
-    return (VV.generate n (uncoords_generator c))
+uncoords c =
+    VV.generateM (VV.length c - 1) (uncoords_generator c)
 
 -- |Construct a set of distances from one of a set of coordinates
-uncoords_generator :: VV.Vector (Vector Float) -> Int -> Vector Float
+uncoords_generator :: VV.Vector (Vector Float) -> Int -> Either String (Vector Float)
 uncoords_generator c i =
-    generate (i + 1) (find_distance c (i + 1))
+    generateM (i + 1) (find_distance c (i + 1))
 
 -- |Find the distance between two points given the set of coordinates
-find_distance :: VV.Vector (Vector Float) -> Int -> Int -> Float
-find_distance c i j = calc_distance (c VV.! i) (c VV.! j)
+find_distance :: VV.Vector (Vector Float) -> Int -> Int -> Either String Float
+find_distance c i j = case calc_distance (c VV.! i) (c VV.! j) of
+    Just x  -> Right x
+    Nothing -> Left $ "sqrt negative distance between points " ++ show i ++ " and " ++ show j 
 
 -- |Calculate the distance between two coordinates
-calc_distance :: Vector Float -> Vector Float -> Float
+calc_distance :: Vector Float -> Vector Float -> Maybe Float
 calc_distance x y = safe_sqrt ((sum2_diff x y) + (sum2_rem x y))
 
 -- |Given two vectors of different lengths, sum the squares of the
@@ -142,12 +154,15 @@ sum2_rem x y =
         GT -> sum2 (unsafeDrop ly x)
 
 -- |Safer version of sqrt, which will not give NaN for slightly negative
-safe_sqrt :: Float -> Float
+safe_sqrt :: Float -> Maybe Float
 safe_sqrt x = 
-    if x >= 0.0 || x < (-tolerance) then
-        sqrt x
-    else
-        0.0
+    if x >= 0.0 then
+        Just (sqrt x)
+    else 
+        if x > -tolerance then
+            Just 0.0
+        else
+            Nothing
 
 -- |Approx absolute comparison of floats
 approx_equal :: Float -> Float -> Float -> Bool
@@ -187,11 +202,12 @@ create_random_vector rnd range n =
     V.replicateM n (uniformRM range rnd)
 
 -- |Various tests of safe_sqrt
-test_safe_sqrt :: Float
-test_safe_sqrt = let
-    result = (safe_sqrt 4.0) + (safe_sqrt (-1e-7)) in
-    assert (result == 2.0)
-    result 
+test_safe_sqrt :: Maybe Float
+test_safe_sqrt = do
+    test1 <- safe_sqrt 4.0
+    test2 <- safe_sqrt (-1e-7)
+    let result = test1 + test2
+    return (assert (result == 2.0) result)
 
 -- |Test sum of squares
 test_sum2 :: Float
@@ -249,10 +265,10 @@ test_sum2_rem_lt = let
     assert (result == 2500.0) result
 
 -- Test calc_distance for two vectors of different lengths
-test_calc_distance :: Float
-test_calc_distance = let
-    result = calc_distance (fromList [3.0]) (fromList []) in
-    assert (result == 3.0) result
+test_calc_distance :: Maybe Float
+test_calc_distance = do
+    result <- calc_distance (fromList [3.0]) (fromList [])
+    return (assert (result == 3.0) result) 
 
 -- |Test coord constructor for intermediate step
 test_coord_constructor :: Float
@@ -485,6 +501,11 @@ test_count_dimensions sample n = case count_dimensions sample of
         assert (result == n)
         Right result
 
+test_count_dimensions_simplex :: StatefulGen g m => g -> Int -> m (Either String Int)
+test_count_dimensions_simplex rnd n = do
+    simplex <- create_random_triangular_matrix rnd (0.99, 1.01) n
+    return (test_count_dimensions simplex n)
+
 -- |Test the reverse calculation of distances from coords
 test_uncoords :: Either String (VV.Vector (Vector Float))
 test_uncoords = let
@@ -508,8 +529,20 @@ test_uncoords = let
 test_from_lists :: VV.Vector (Vector Float)
 test_from_lists = fromLists [[], [1.0], [1.0, 2.0]]
 
+-- |Ultra-simplistic argument parsing. Either returns 0
+-- |or a number of points to test
+parse_args :: [String] -> Int
+parse_args [] = 0
+parse_args (arg:[]) = read arg
+parse_args _ = -1
+
 main :: IO ()
 main = do
+
+    args <- getArgs
+    let arg = parse_args args
+    let n = if arg > 0 then arg else 30
+
     putStrLn ""
     putStrLn "Running tests..."
 
@@ -545,10 +578,10 @@ main = do
     putStrLn $ "test_uncoords: " ++ (show test_uncoords)
     putStrLn $ "test_count_dimensions_345_plus: " ++ (show test_count_dimensions_345_plus)
 
-    -- Some tests use random numbers. One source for all these
-    rnd <- MWC.createSystemRandom
-    simplex30 <- create_random_triangular_matrix rnd (0.99, 1.01) 30
-    putStrLn $ "test_count_large_random_simplex: " ++ (show (test_count_dimensions simplex30 30))
+    -- One generator shared by all tests that need random numbers
+    rnd <- createSystemRandom
+    count_dimensions_simplex <- test_count_dimensions_simplex rnd n
+    putStrLn $ "test_count_large_random_simplex: " ++ (show count_dimensions_simplex)
 
     putStrLn "...all tests passed"
     putStrLn ""
