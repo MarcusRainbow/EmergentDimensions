@@ -65,11 +65,9 @@ calc_coord s p = case (length p) of
 
 -- |Validates a vector of vectors, checking the values for NaN
 validate_non_nan :: VV.Vector (Vector Float) -> Either String (VV.Vector (Vector Float))
-validate_non_nan v = 
-    if VV.any (V.any isNaN) v then
-        Left $ "At least one coordinate is NaN in " ++ show v
-    else
-        Right v
+validate_non_nan v = case VV.findIndex (V.any isNaN) v of
+    Just i  -> Left $ "At least one coordinate is NaN in " ++ show (v VV.! i)
+    Nothing -> Right v
 
 -- |Construct one of the coordinate dimensions x_n given the
 -- |preceding dimensions x_i and the preceding coordinates p_ij
@@ -501,10 +499,25 @@ test_count_dimensions sample n = case count_dimensions sample of
         assert (result == n)
         Right result
 
+-- |Run any test of count_dimensions that is expected to fail
+test_count_dimensions_bad :: VV.Vector (Vector Float) -> Either String Int
+test_count_dimensions_bad sample = case count_dimensions sample of
+    Left e -> Left e
+    Right result -> error "test_count_dimensions_bad failed to fail"
+
+-- |Tests whether a simplex with all lengths randomly picked from 0.99 to 1.01
+-- |matches its dimension count.
 test_count_dimensions_simplex :: StatefulGen g m => g -> Int -> m (Either String Int)
 test_count_dimensions_simplex rnd n = do
     simplex <- create_random_triangular_matrix rnd (0.99, 1.01) n
     return (test_count_dimensions simplex n)
+
+-- |Same as test_count_dimensions_simplex but with lengths taken from a much wider range
+-- |Should fail.
+test_count_dimensions_bad_simplex :: StatefulGen g m => g -> Int -> m (Either String Int)
+test_count_dimensions_bad_simplex rnd n = do
+    simplex <- create_random_triangular_matrix rnd (0.5, 1.5) n
+    return (test_count_dimensions_bad simplex)
 
 -- |Test the reverse calculation of distances from coords
 test_uncoords :: Either String (VV.Vector (Vector Float))
@@ -582,6 +595,8 @@ main = do
     rnd <- createSystemRandom
     count_dimensions_simplex <- test_count_dimensions_simplex rnd n
     putStrLn $ "test_count_large_random_simplex: " ++ (show count_dimensions_simplex)
+    count_dimensions_bad_simplex <- test_count_dimensions_bad_simplex rnd n
+    putStrLn $ "test_count_bad_random_simplex: " ++ (show count_dimensions_bad_simplex)
 
     putStrLn "...all tests passed"
     putStrLn ""
