@@ -1,10 +1,15 @@
 module Coords (
+    Coord,
+    Distance,
     count_dimensions,
     dimension_ranges,
     validated_coords,
     uncoords,
     fromLists,
-    create_random_triangular_matrix
+    create_random_triangular_matrix,
+    approx_equal,
+    approx_equal_vector,
+    approx_equal_vv
 ) where
 
 import Data.Vector.Unboxed hiding (foldr1, foldr, sum, length, last, zipWith, map, (++))
