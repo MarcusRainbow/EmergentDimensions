@@ -29,7 +29,7 @@ type Force = Double
 -- |law that has more dimensions for smaller distances.
 power_law :: VV.Vector (Vector C.Coord) -> (Distance -> Double)
 power_law c = let count = count_coord_dimensions c in
-    (\s -> 1.0 / (s^count))
+    (\s -> 1.0 / (s^(count - 1))) -- count - 1, because we differentiate
 
 -- |Given a vector of coordinates, return a vector of forces applied to
 -- |each distance between two points
