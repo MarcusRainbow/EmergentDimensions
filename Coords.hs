@@ -2,6 +2,7 @@ module Coords (
     Coord,
     Distance,
     count_dimensions,
+    count_coord_dimensions,
     dimension_ranges,
     validated_coords,
     uncoords,
@@ -42,10 +43,14 @@ type Distance = Double
 -- |the dimensions. If there is an error, such as a set of
 -- |distances that do not fit into any possible space, a
 -- |explanatory string is returned. Otherwise the count. 
-count_dimensions :: VV.Vector (Vector Coord) -> Either String Int
+count_dimensions :: VV.Vector (Vector Distance) -> Either String Int
 count_dimensions s = do
-    c <- validated_coords s
-    return (if VV.null c then 0 else V.length (VV.last c))
+    c <- validated_coords s 
+    return (count_coord_dimensions c)
+
+-- |Count the number of dimensions in a set of coordinates
+count_coord_dimensions :: VV.Vector (Vector Coord) -> Int
+count_coord_dimensions c = if VV.null c then 0 else V.length (VV.last c)
 
 -- |Given a set of distances between points, give a list of
 -- |the maximum range of each dimension, sorted with the largest
