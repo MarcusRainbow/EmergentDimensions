@@ -70,8 +70,8 @@ dynamics_s :: Momentum -> Momentum -> Distance -> Interval -> Distance
 dynamics_s p p' s dt = s + (p + p') * 0.5 * dt
 
 -- |Test a single step for a equilateral simplex
-test_step_simplex :: Either String State
-test_step_simplex =
+test_step_eq_simplex :: Either String State
+test_step_eq_simplex =
     let 
         dists = fromLists [
             [1.0],
@@ -81,12 +81,24 @@ test_step_simplex =
             [0.01],
             [0.01, 0.01],
             [0.01, 0.01, 0.01]]
-        dt = 1e-3
     in
-        do
-            coords <- C.validated_coords dists
-            forces <- F.forces dists coords
-            return $ step (momenta, dists) forces dt
+        test_step dists momenta 1e-3 3
+
+-- |Test run a single dynamics step
+test_step :: Matrix Distance -> Matrix Momentum -> Interval -> Int -> Either String State
+test_step dists momenta dt n = do
+    coords <- C.validated_coords dists
+    forces <- F.forces dists coords
+    let (momenta', dists') = step (momenta, dists) forces dt
+    dimensions <- C.count_dimensions dists'
+    return (assert (dimensions == n) (momenta', dists'))
+
+-- |Experiment with a slightly randomised equilateral simplex
+test_step_simplex :: StatefulGen g m => g -> Int -> m (Either String State)
+test_step_simplex rnd n = do
+    simplex <- C.create_random_triangular_matrix rnd (0.99, 1.01) n
+    momenta <- C.create_random_triangular_matrix rnd (0.09999, 0.10001) n
+    return $ test_step simplex momenta 1e-3 n
 
 main :: IO ()
 main = do
@@ -94,12 +106,12 @@ main = do
     putStrLn ""
     putStrLn "Running Dynamics tests..."
 
-    putStrLn $ "test_step_simplex: " ++ (show test_step_simplex)
+    putStrLn $ "test_step_eq_simplex: " ++ (show test_step_eq_simplex)
 
     -- One generator shared by all tests that need random numbers
-    -- rnd <- createSystemRandom
-    -- forces_simplex <- test_forces_simplex rnd 10
-    -- putStrLn $ "test_forces_simplex: " ++ (show forces_simplex)
+    rnd <- createSystemRandom
+    step_simplex <- test_step_simplex rnd 10
+    putStrLn $ "test_step_simplex: " ++ (show step_simplex)
         
     putStrLn "...all tests passed"
     putStrLn ""
