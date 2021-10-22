@@ -1,4 +1,4 @@
-import Data.Vector.Unboxed hiding (foldr1, foldr, force, sum, length, last, zipWith, map, (++))
+import Data.Vector.Unboxed hiding (foldr1, foldr, foldM, force, sum, length, last, zipWith, map, (++))
 import qualified Data.Vector.Unboxed as V
 import qualified Data.Vector as VV
 import Data.Maybe
@@ -9,6 +9,7 @@ import Numeric.IEEE
 import System.Random
 import System.Random.Stateful
 import Control.Exception
+import Control.Monad
 import Debug.Trace
 import System.Environment
 import System.Random.MWC as MWC
@@ -81,24 +82,40 @@ test_step_eq_simplex =
             [0.01],
             [0.01, 0.01],
             [0.01, 0.01, 0.01]]
-    in
-        test_step dists momenta 1e-3 3
+    in do
+        (momenta', dists') <- test_step (momenta, dists) 1e-3
+        dimensions <- C.count_dimensions dists'
+        return (assert (dimensions == 3) (momenta', dists'))
 
--- |Test run a single dynamics step
-test_step :: Matrix Distance -> Matrix Momentum -> Interval -> Int -> Either String State
-test_step dists momenta dt n = do
+-- |Test run one or more dynamics steps
+test_step :: State -> Interval -> Either String State
+test_step (momenta, dists) dt = do
     coords <- C.validated_coords dists
     forces <- F.forces dists coords
-    let (momenta', dists') = step (momenta, dists) forces dt
-    dimensions <- C.count_dimensions dists'
-    return (assert (dimensions == n) (momenta', dists'))
+    return $ step (momenta, dists) forces dt
 
 -- |Experiment with a slightly randomised equilateral simplex
 test_step_simplex :: StatefulGen g m => g -> Int -> m (Either String State)
 test_step_simplex rnd n = do
     simplex <- C.create_random_triangular_matrix rnd (0.99, 1.01) n
     momenta <- C.create_random_triangular_matrix rnd (0.09999, 0.10001) n
-    return $ test_step simplex momenta 1e-3 n
+    return $ test_step (momenta, simplex) 1e-3
+
+
+-- |Multiple steps with a slightly randomised equilateral simplex
+test_multistep_simplex :: StatefulGen g m => g -> Int -> Int -> m (Either String Int)
+test_multistep_simplex rnd m n = do
+    simplex <- C.create_random_triangular_matrix rnd (0.99, 1.01) n
+    momenta <- C.create_random_triangular_matrix rnd (0.09999, 0.10001) n
+    return $ test_multistep (momenta, simplex) 1e-3 m n
+
+-- |Generic multiple step tester. Runs m steps, followed by a
+-- |test of the dimensionality, which should be n
+test_multistep :: State -> Interval -> Int -> Int -> Either String Int
+test_multistep s dt m n = do
+    (momenta, dists) <- foldM (\a _ -> test_step a dt) s [0..m]
+    dimensions <- C.count_dimensions dists
+    return $ assert (dimensions == n) dimensions
 
 main :: IO ()
 main = do
@@ -110,8 +127,10 @@ main = do
 
     -- One generator shared by all tests that need random numbers
     rnd <- createSystemRandom
-    step_simplex <- test_step_simplex rnd 10
+    step_simplex <- test_step_simplex rnd 5
     putStrLn $ "test_step_simplex: " ++ (show step_simplex)
+    multistep_simplex <- test_multistep_simplex rnd 10 10
+    putStrLn $ "test_multistep_simplex: " ++ (show multistep_simplex)
         
     putStrLn "...all tests passed"
     putStrLn ""
