@@ -1,3 +1,10 @@
+module Dynamics (
+    Momentum,
+    State,
+    Interval,
+    step,
+) where
+
 import Data.Vector.Unboxed hiding (foldr1, foldr, foldM, force, sum, length, last, zipWith, map, (++))
 import qualified Data.Vector.Unboxed as V
 import qualified Data.Vector as VV
