@@ -25,7 +25,3 @@
  On the third day, tiny differences between the distances appeared. That is where our simulation appears, with a universe that is initially very nearly an equilateral simplex but with tiny differences in momenta or distances.
 
 ## Some Implementation Details
-
-
-
-

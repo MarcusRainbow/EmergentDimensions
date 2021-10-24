@@ -1,5 +1,6 @@
 module Forces (
     Force,
+    Gravity,
     power_law,
     forces
 ) where
@@ -25,6 +26,10 @@ import Coords as C
 -- |term is used pretty loosely.
 type Force = Double
 
+-- |Type of the gravitational constant. This should be negative if you want
+-- |accelerations to be inward.
+type Gravity = Double
+
 -- |What is an appropriate force power law for a multi-dimensional world?
 -- |In our universe, first-order forces with zero-mass bosons follow a 
 -- |one-over-r-squared law, but this is because our universe is 3d.
@@ -33,15 +38,15 @@ type Force = Double
 -- |assumes the same power law for every distance. Arguably, the cutoff when
 -- |counting dimensions depends on the distance scale, so we could try a power
 -- |law that has more dimensions for smaller distances.
-power_law :: C.Matrix C.Coord -> (Distance -> Double)
-power_law c = let count = count_coord_dimensions c in
-    (\s -> 1.0 / (s^(count - 1))) -- count - 1, because we differentiate
+power_law :: C.Matrix C.Coord -> Gravity -> (Distance -> Double)
+power_law c g = let count = count_coord_dimensions c in
+    (\s -> g / (s^(count - 1))) -- count - 1, because we differentiate
 
 -- |Given a vector of coordinates, return a vector of forces applied to
 -- |each distance between two points. Returns a string in case of error
 -- |(though this is not currently used).
-forces :: C.Matrix C.Distance -> C.Matrix C.Coord -> Either String (C.Matrix Force)
-forces s c = Right (forces_given_power_law (power_law c) c s)
+forces :: C.Matrix C.Distance -> C.Matrix C.Coord -> Gravity -> Either String (C.Matrix Force)
+forces s c g = Right (forces_given_power_law (power_law c g) c s)
 
 -- |Given a vector of coordinates and a power law,
 -- |return a vector of forces applied to
@@ -213,7 +218,7 @@ test_forces_simplex rnd n = do
 test_forces :: VV.Vector (Vector Distance) -> Either String (C.Matrix Force)
 test_forces s = do
     c <- C.validated_coords s
-    f <- forces s c
+    f <- forces s c 1.0
     return f
 
 main :: IO ()

@@ -98,7 +98,7 @@ test_step_eq_simplex =
 test_step :: State -> Interval -> Either String State
 test_step (momenta, dists) dt = do
     coords <- C.validated_coords dists
-    forces <- F.forces dists coords
+    forces <- F.forces dists coords 1.0
     return $ step (momenta, dists) forces dt
 
 -- |Experiment with a slightly randomised equilateral simplex
@@ -107,7 +107,6 @@ test_step_simplex rnd n = do
     simplex <- C.create_random_triangular_matrix rnd (0.99, 1.01) n
     momenta <- C.create_random_triangular_matrix rnd (0.09999, 0.10001) n
     return $ test_step (momenta, simplex) 1e-3
-
 
 -- |Multiple steps with a slightly randomised equilateral simplex
 test_multistep_simplex :: StatefulGen g m => g -> Int -> Int -> m (Either String Int)
